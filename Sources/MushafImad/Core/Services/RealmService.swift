@@ -8,9 +8,17 @@
 import Foundation
 import RealmSwift
 
+/// Protocol abstraction over RealmService to allow dependency injection and easier testing
+@MainActor
+public protocol RealmServiceProtocol: Sendable {
+    func fetchAllChaptersAsync() async throws -> [Chapter]
+    func fetchAllPartsAsync() async throws -> [Part]
+    func fetchAllQuartersAsync() async throws -> [Quarter]
+}
+
 /// Facade around the bundled Realm database that powers Quran metadata.
 @MainActor
-public final class RealmService {
+public final class RealmService: RealmServiceProtocol {
     public static let shared = RealmService()
     
     private var realm: Realm?
@@ -73,7 +81,7 @@ public final class RealmService {
         
         // Get the path to the bundled Realm file
         guard let bundledRealmURL = Bundle.mushafResources.url(forResource: "quran", withExtension: "realm") else {
-            throw NSError(domain: "RealmService", code: 1, 
+            throw NSError(domain: "RealmService", code: 1,
                          userInfo: [NSLocalizedDescriptionKey: "Could not find quran.realm in bundle"])
         }
         
