@@ -46,6 +46,9 @@ struct ContentView_iOS: View {
                             ToastDemo()
                                 .environmentObject(toastManager)
                         }
+                        NavigationLink("Tilt to Scroll Settings") {
+                            TiltSettingsView()
+                        }
                     }
                     
                     Section("Audio") {
