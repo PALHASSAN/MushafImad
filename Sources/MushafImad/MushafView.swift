@@ -75,11 +75,13 @@ public struct MushafView: View {
 
     @State private var viewModel = ViewModel()
     @StateObject private var playerViewModel = QuranPlayerViewModel()
+    @StateObject private var eyeTrackingCoordinator = EyeTrackingCoordinator()
     @EnvironmentObject private var reciterService: ReciterService
     @EnvironmentObject private var toastManager: ToastManager
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @State private var playingVerse: Verse? = nil
+    @State private var pageContentFrame: CGRect = .zero
 #if canImport(UIKit)
     @StateObject private var tiltManager = TiltScrollManager()
 #endif
@@ -88,6 +90,7 @@ public struct MushafView: View {
     @AppStorage("display_mode") private var displayMode: DisplayMode = .text
     @AppStorage("text_font_size") private var textFontSize: Double = 24.0
     @State private var textModeInitialChapter: Int = 1
+    @State private var showEyeTrackingSettings: Bool = false
 
 
     public init(initialPage: Int? = nil,
@@ -122,6 +125,16 @@ public struct MushafView: View {
             } else {
                 pageView
                     .foregroundStyle(.naturalBlack)
+            }
+            
+            // Eye tracking overlay (experimental)
+            if eyeTrackingCoordinator.isEnabled && eyeTrackingCoordinator.showOverlay {
+                EyeTrackingOverlayView(
+                    tracker: eyeTrackingCoordinator.progressTracker,
+                    currentGaze: eyeTrackingCoordinator.currentGaze,
+                    showDebugInfo: eyeTrackingCoordinator.showDebugInfo,
+                    trackingState: eyeTrackingCoordinator.trackingState
+                )
             }
         }
         .environment(\.colorScheme, readingTheme == .night ? .dark : .light)
@@ -163,6 +176,8 @@ public struct MushafView: View {
             if newMode == .text {
                 let page = viewModel.scrollPosition ?? initialPage ?? 1
                 textModeInitialChapter = RealmService.shared.getChapterForPage(page)?.number ?? 1
+                eyeTrackingCoordinator.deactivate(context: modelContext)
+                pageContentFrame = .zero
             }
         }
         .toolbar {
@@ -213,6 +228,19 @@ public struct MushafView: View {
 #if canImport(UIKit)
             tiltManager.deactivate()
 #endif
+            eyeTrackingCoordinator.deactivate(context: modelContext)
+        }
+        .sheet(isPresented: $showEyeTrackingSettings) {
+            EyeTrackingSettingsView(coordinator: eyeTrackingCoordinator)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: showEyeTrackingSettings) { _, isShowing in
+            if isShowing {
+                eyeTrackingCoordinator.pause()
+            } else if eyeTrackingCoordinator.isEnabled {
+                eyeTrackingCoordinator.resume()
+            }
         }
     }
     // MARK: - Verse Action Bar
@@ -279,6 +307,13 @@ public struct MushafView: View {
             displayMode = (displayMode == .image) ? .text : .image
         } label: {
             Image(systemName: displayMode == .image ? "text.justify.leading" : "book.pages")
+        }
+        // Eye tracking settings button (experimental)
+        Button {
+            showEyeTrackingSettings = true
+        } label: {
+            Image(systemName: "eye")
+                .symbolEffect(.pulse, isActive: eyeTrackingCoordinator.isEnabled)
         }
     }
 
@@ -402,6 +437,58 @@ public struct MushafView: View {
             onTap: {
                 if let action = externalPageTapHandler {
                     action()
+                }
+            }
+        )
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        let frame = geo.frame(in: .global)
+                        pageContentFrame = frame
+                        // Only activate if this is the currently-visible page
+                        if eyeTrackingCoordinator.isEnabled && viewModel.scrollPosition == pageNumber {
+                            activateTracking(for: pageNumber, frame: frame)
+                        }
+                    }
+                    .onChange(of: eyeTrackingCoordinator.isEnabled) { _, enabled in
+                        // Re-activate when the user enables tracking while this page is visible
+                        if enabled {
+                            if viewModel.scrollPosition == pageNumber {
+                                activateTracking(for: pageNumber, frame: geo.frame(in: .global))
+                            }
+                        } else {
+                            eyeTrackingCoordinator.deactivate(context: modelContext)
+                        }
+                    }
+                    .onChange(of: viewModel.scrollPosition) { _, newPage in
+                        // Activate when this page becomes the active scroll position
+                        if eyeTrackingCoordinator.isEnabled && newPage == pageNumber {
+                            activateTracking(for: pageNumber, frame: geo.frame(in: .global))
+                        }
+                    }
+                    .onChange(of: geo.frame(in: .global)) { _, newFrame in
+                        pageContentFrame = newFrame
+                        // Only update geometry for the current page to avoid stale overrides
+                        if eyeTrackingCoordinator.isEnabled && viewModel.scrollPosition == pageNumber {
+                            eyeTrackingCoordinator.updateGeometry(frame: newFrame)
+                        }
+                    }
+            }
+        )
+    }
+
+    private func activateTracking(for pageNumber: Int, frame: CGRect) {
+        let verses = RealmService.shared.getVersesForPage(pageNumber)
+        eyeTrackingCoordinator.activate(
+            pageNumber: pageNumber,
+            verses: verses,
+            pageFrame: frame,
+            onPageCompleted: {
+                if pageNumber < 604 {
+                    withAnimation {
+                        viewModel.scrollPosition = pageNumber + 1
+                    }
                 }
             }
         )
